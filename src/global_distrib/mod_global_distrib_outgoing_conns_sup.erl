@@ -5,7 +5,7 @@
 -include("ejabberd.hrl").
 
 -export([start_link/0, init/1]).
--export([add_server/1, get_connection/1]).
+-export([add_server/1, get_connection/1, ensure_server_started/1]).
 
 %%--------------------------------------------------------------------
 %% API
@@ -33,10 +33,7 @@ add_server(Server) ->
 
 -spec get_connection(Server :: ejabberd:lserver()) -> pid().
 get_connection(Server) ->
-    case whereis(mod_global_distrib_utils:server_to_sup_name(Server)) of
-        undefined -> ok = add_server(Server);
-        _ -> ok
-    end,
+    ensure_server_started(Server),
     mod_global_distrib_server_sup:get_connection(Server).
 
 %%--------------------------------------------------------------------
@@ -44,6 +41,7 @@ get_connection(Server) ->
 %%--------------------------------------------------------------------
 
 init(_) ->
+    ?DEBUG("CONNS OUT starting ~p", [mod_global_distrib_utils:opt(mod_global_distrib, local_host)]),
     SupFlags = #{ strategy => one_for_one, intensity => 5, period => 5 },
     {ok, {SupFlags, []}}.
 
@@ -51,3 +49,11 @@ init(_) ->
 %% Helpers
 %%--------------------------------------------------------------------
 
+ensure_server_started(Server) ->
+  case whereis(mod_global_distrib_utils:server_to_sup_name(Server)) of
+    undefined ->
+      ?DEBUG("Host ~p didn't have a corresponding supervisor", [Server]),
+      ok = add_server(Server);
+    _ -> ok
+  end,
+  ok.
