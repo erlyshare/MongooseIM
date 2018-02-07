@@ -52,7 +52,8 @@ groups() ->
        test_global_disco,
        test_component_unregister,
        test_update_senders_host,
-       test_update_senders_host_by_ejd_service
+       test_update_senders_host_by_ejd_service,
+       test_component_discovery
        %% TODO: Add test case fo global_distrib_addr option
       ]},
      {cluster_restart, [],
@@ -350,7 +351,7 @@ test_component_on_one_host(Config) ->
     ComponentConfig = [{server, <<"localhost">>}, {host, <<"localhost">>}, {password, <<"secret">>},
                        {port, 8888}, {component, <<"test_service">>}],
 
-    {Comp, Addr, _Name} = component_SUITE:connect_component(ComponentConfig),
+    {Comp, Addr, Name} = component_SUITE:connect_component(ComponentConfig),
 
     Story = fun(User) ->
                     Msg1 = escalus_stanza:chat_to(Addr, <<"Hi2!">>),
@@ -370,6 +371,71 @@ test_component_on_one_host(Config) ->
             end,
 
     [escalus:fresh_story(Config, [{User, 1}], Story) || User <- [alice, eve]].
+
+test_component_discovery(Config) ->
+    ComponentConfig = [{server, <<"localhost">>}, {host, <<"localhost">>}, {password, <<"secret">>},
+                       {port, 8888}, {component, <<"test_service">>}],
+    Component2Config = [{server, <<"fed1">>}, {host, <<"localhost">>}, {password, <<"secret">>},
+                       {port, 8888}, {component, <<"test_service2">>}],
+
+    Res1 = component_SUITE:connect_component(ComponentConfig),
+    Res2 = component_SUITE:connect_component(Component2Config),
+    ct:log("Connection to fed1 result: ~p~n", [Res2]),
+    timer:sleep(5000),
+
+    print_status(),
+
+    {Comp, Addr, Name} = Res1, %% Res1 to connect to eu, Res2 to connect to asia
+
+    Story = fun(User) ->
+                    ct:log("User: ~p~n", [User]),
+                    Msg1 = escalus_stanza:chat_to(Addr, <<"Hi2!">>),
+                    escalus:send(User, Msg1),
+                    %% Then component receives it
+
+                    Europe1jids = rpc(europe_node1, ets, tab2list, [mod_global_distrib_mapping_redis_jids]),
+                    Europe2jids = rpc(europe_node2, ets, tab2list, [mod_global_distrib_mapping_redis_jids]),
+                    Asiajids = rpc(asia_node, ets, tab2list, [mod_global_distrib_mapping_redis_jids]),
+                    ct:log("jids:", []),
+                    ct:log("eu1: ~p~neu2: ~p~nasia: ~p~n", [Europe1jids, Europe2jids, Asiajids]),
+
+
+                    Reply1 = escalus:wait_for_stanza(Comp),
+                    escalus:assert(is_chat_message, [<<"Hi2!">>], Reply1),
+
+                    %% When components sends a reply
+                    Msg2 = escalus_stanza:chat_to(User, <<"Oh hi!">>),
+                    escalus:send(Comp, escalus_stanza:from(Msg2, Addr)),
+
+                    %% Then Alice receives it
+                    Reply2 = escalus:wait_for_stanza(User),
+                    escalus:assert(is_chat_message, [<<"Oh hi!">>], Reply2),
+                    escalus:assert(is_stanza_from, [Addr], Reply2)
+            end,
+    [escalus:fresh_story(Config, [{User, 1}], Story) || User <- [eve, alice]],
+    ct:log("++++++++++++++++++++++++++++~n", []),
+    print_status(),
+    ok.
+
+print_status() ->
+ Europe1ExtComp = rpc(europe_node1, ets, tab2list, [external_component]),
+    Europe2ExtComp = rpc(europe_node2, ets, tab2list, [external_component]),
+    AsiaExtComp = rpc(asia_node, ets, tab2list, [external_component]),
+    ct:log("external component tabs", []),
+    ct:log("asia: ~p~neurope1: ~p~neurope2: ~p~n", [AsiaExtComp, Europe1ExtComp, Europe2ExtComp]),
+    Europe1Mapping = rpc(europe_node1, ets, tab2list, [mod_global_distrib_mapping_redis_domains]),
+    Europe2Mapping = rpc(europe_node2, ets, tab2list, [mod_global_distrib_mapping_redis_domains]),
+    AsiaMapping = rpc(asia_node, ets, tab2list, [mod_global_distrib_mapping_redis_domains]),
+    ct:log("Redis mapping domains:", []),
+    ct:log("asia: ~p~neurope1: ~p~neurope2: ~p~n", [AsiaMapping, Europe1Mapping, Europe2Mapping]),
+
+    ForDomain = rpc(europe_node1, mod_global_distrib_mapping, for_domain, [<<"test_service.localhost">>]),
+    ForDomain2 = rpc(asia_node, mod_global_distrib_mapping, for_domain, [<<"test_service2.localhost">>]),
+    ct:log("for domain:~n", []),
+    ct:log("test_service: ~p~n", [ForDomain]),
+    ct:log("test_service2: ~p~n", [ForDomain2]),
+
+    ct:log("All domains: ~p~n", [rpc(asia_node, mod_global_distrib_mapping, all_domains, [])]).
 
 test_component_disconnect(Config) ->
     ComponentConfig = [{server, <<"localhost">>}, {host, <<"localhost">>}, {password, <<"secret">>},
